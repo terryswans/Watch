@@ -2,97 +2,103 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Genius F5LE - Complete Health Monitor</title>
+    <title>Genius F5LE - Full Health Access</title>
     <style>
-        :root { --neon-blue: #00d2ff; --bg-dark: #121212; }
-        body { font-family: 'Segoe UI', sans-serif; background: var(--bg-dark); color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; width: 100%; max-width: 600px; }
-        .card { background: #1e1e1e; padding: 20px; border-radius: 12px; border-bottom: 3px solid var(--neon-blue); text-align: center; }
-        .val { font-size: 2.2rem; font-weight: bold; color: var(--neon-blue); }
-        .unit { font-size: 0.8rem; color: #888; text-transform: uppercase; }
-        button { background: var(--neon-blue); color: #000; border: none; padding: 15px 30px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-bottom: 20px; transition: 0.3s; }
-        button:hover { transform: scale(1.05); box-shadow: 0 0 15px var(--neon-blue); }
-        #status { font-size: 0.9rem; margin-bottom: 20px; color: #aaa; }
+        body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 400px; margin: 20px auto; }
+        .box { background: #333; padding: 15px; border-radius: 10px; border: 1px solid #444; }
+        .val { font-size: 1.8rem; color: #00ffcc; font-weight: bold; }
+        .label { font-size: 0.7rem; color: #aaa; text-transform: uppercase; }
+        button { background: #00ffcc; color: black; border: none; padding: 15px 30px; border-radius: 5px; font-weight: bold; cursor: pointer; }
+        #log { font-size: 0.7rem; color: #666; margin-top: 20px; background: #000; padding: 10px; text-align: left; overflow-y: scroll; height: 100px; }
     </style>
 </head>
 <body>
 
-    <h2>GENIUS F5LE LIVE</h2>
-    <div id="status">Ready to Pair</div>
-    <button id="connect">SYNC ALL DATA</button>
+    <h2>GENIUS F5LE DEEP SYNC</h2>
+    <button id="scanBtn">SEARCH FOR ALL SERVICES</button>
+    <div id="status" style="margin: 15px; color: #00ffcc;">Status: Not Connected</div>
 
-    <div class="grid">
-        <div class="card"><div class="unit">Steps Today</div><div id="steps" class="val">--</div></div>
-        <div class="card"><div class="unit">Heart Rate</div><div id="hr" class="val">--</div><div class="unit">BPM</div></div>
-        <div class="card"><div class="unit">Blood Pressure</div><div id="bp" class="val">--</div><div class="unit">mmHg</div></div>
-        <div class="card"><div class="unit">SpO2 (Oxygen)</div><div id="o2" class="val">--</div><div class="unit">%</div></div>
-        <div class="card"><div class="unit">Battery</div><div id="batt" class="val">--</div><div class="unit">Level</div></div>
+    <div class="stat-grid">
+        <div class="box"><div class="label">Step Count</div><div id="steps" class="val">--</div></div>
+        <div class="box"><div class="label">Heart Rate</div><div id="hr" class="val">--</div></div>
+        <div class="box"><div class="label">Blood Pressure</div><div id="bp" class="val">--</div></div>
+        <div class="box"><div class="label">SpO2 Oxygen</div><div id="o2" class="val">--</div></div>
     </div>
 
+    <div id="log">Logs initialized...</div>
+
     <script>
-        const btn = document.getElementById('connect');
+        const log = (m) => { document.getElementById('log').innerHTML += `<div>${m}</div>`; };
         
-        btn.addEventListener('click', async () => {
+        document.getElementById('scanBtn').onclick = async () => {
             try {
-                // We request multiple standard services + the generic '0xFFE0' often used for fitness data
+                // We add the most common "Health" UUIDs used by Genius/FitPro/DaFit watches
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: ['heart_rate', 'battery_service', 0xFFE0, 'device_information']
+                    optionalServices: [
+                        'heart_rate', 
+                        'battery_service',
+                        0xFFE0, // Common fitness data
+                        0xFEE7, // Common "Steps" for Chinese watches
+                        0x180D, // Heart Rate
+                        '0000fee7-0000-1000-8000-00805f9b34fb', // Step Service UUID
+                        '6e400001-b5a3-f393-e0a9-e50e24dcca9e'  // Nordic UART (All data stream)
+                    ]
                 });
 
-                document.getElementById('status').innerText = "Connecting to " + device.name;
                 const server = await device.gatt.connect();
+                document.getElementById('status').innerText = "Status: DEEP CONNECTED";
+                log("Scanning all services...");
 
-                // 1. Standard Heart Rate
-                try {
-                    const hrS = await server.getPrimaryService('heart_rate');
-                    const hrC = await hrS.getCharacteristic('heart_rate_measurement');
-                    await hrC.startNotifications();
-                    hrC.addEventListener('characteristicvaluechanged', (e) => {
-                        document.getElementById('hr').innerText = e.target.value.getUint8(1);
-                    });
-                } catch(e) { console.log("Standard HR not found, checking custom..."); }
-
-                // 2. Standard Battery
-                try {
-                    const batS = await server.getPrimaryService('battery_service');
-                    const batC = await batS.getCharacteristic('battery_level');
-                    const bVal = await batC.readValue();
-                    document.getElementById('batt').innerText = bVal.getUint8(0) + "%";
-                } catch(e) {}
-
-                // 3. Custom Health Data (Steps, BP, O2)
-                // Most Genius F5LE models use Service 0xFFE0 / Characteristic 0xFFE1 for a "Data Stream"
-                try {
-                    const customS = await server.getPrimaryService(0xFFE0);
-                    const customC = await customS.getCharacteristic(0xFFE1);
-                    await customC.startNotifications();
+                const services = await server.getPrimaryServices();
+                
+                for (const service of services) {
+                    log("Found Service: " + service.uuid);
+                    const characteristics = await service.getCharacteristics();
                     
-                    customC.addEventListener('characteristicvaluechanged', (e) => {
-                        const data = e.target.value;
-                        // HEX logic for F5LE custom protocol:
-                        // Byte index varies by firmware, but common offsets are:
-                        if (data.byteLength >= 10) {
-                            const steps = (data.getUint8(5) << 16) | (data.getUint8(6) << 8) | data.getUint8(7);
-                            const systolic = data.getUint8(8);
-                            const oxygen = data.getUint8(9);
-                            
-                            if(steps > 0) document.getElementById('steps').innerText = steps;
-                            if(systolic > 0) document.getElementById('bp').innerText = systolic + "/" + (systolic - 40); 
-                            if(oxygen > 0) document.getElementById('o2').innerText = oxygen + "%";
+                    for (const char of characteristics) {
+                        log(" -> Found Characteristic: " + char.uuid);
+                        
+                        // Check if it's a Notify characteristic (This is where "All Data" usually lives)
+                        if (char.properties.notify || char.properties.indicate) {
+                            await char.startNotifications();
+                            char.addEventListener('characteristicvaluechanged', handleData);
+                            log(" !! Listening to: " + char.uuid);
                         }
-                    });
-                    
-                    document.getElementById('status').innerText = "FULL SYNC ACTIVE";
-                } catch(e) { 
-                    document.getElementById('status').innerText = "Connected (Basic Only)";
-                    console.log("Custom data stream not found.");
+                    }
                 }
-
-            } catch (err) {
-                document.getElementById('status').innerText = "Error: " + err.message;
+            } catch (e) {
+                log("Error: " + e.message);
             }
-        });
+        };
+
+        function handleData(event) {
+            const data = event.target.value;
+            log("Data received! Bytes: " + data.byteLength);
+
+            // This is the "Magic" parser for F5LE style watches
+            // Data is usually sent as a 10-20 byte packet
+            if (data.byteLength >= 7) {
+                // Standard Heart Rate (if from HR service)
+                if (data.byteLength == 2) {
+                    document.getElementById('hr').innerText = data.getUint8(1);
+                }
+                
+                // Generic Fitness Packet Parser
+                // Most F5LE watches send steps in byte 5, 6, 7
+                const steps = (data.getUint8(4) << 16) | (data.getUint8(5) << 8) | data.getUint8(6);
+                if (steps > 0 && steps < 100000) document.getElementById('steps').innerText = steps;
+
+                // Health data (BP/O2) often comes in bytes 8 and 9
+                if (data.byteLength >= 10) {
+                    const sys = data.getUint8(8);
+                    const o2 = data.getUint8(9);
+                    if (sys > 40) document.getElementById('bp').innerText = sys + "/80";
+                    if (o2 > 50) document.getElementById('o2').innerText = o2 + "%";
+                }
+            }
+        }
     </script>
 </body>
 </html>
