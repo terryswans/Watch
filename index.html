@@ -1,27 +1,28 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>F5LE Master Stream</title>
+    <title>Genius F5LE - Master Unlock</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 500px; margin: auto; }
-        .card { background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: 20px auto; }
+        .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #333; box-shadow: 0 0 15px rgba(0,255,204,0.2); }
         .val { font-size: 3rem; color: #00ffcc; font-weight: bold; }
-        button { background: #00ffcc; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; }
-        #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 150px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
+        .label { color: #888; font-size: 0.8rem; text-transform: uppercase; }
+        button { background: #00ffcc; color: #000; border: none; padding: 18px 45px; border-radius: 50px; font-weight: bold; cursor: pointer; font-size: 1rem; }
+        #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 15px; height: 160px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE MASTER STREAM</h1>
-    <button id="go">FORCE DATA STREAM</button>
+    <h1>F5LE MASTER UNLOCK</h1>
+    <button id="go">UNBLOCK SENSORS & SYNC</button>
 
     <div class="grid">
-        <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
-        <div class="card"><div id="hr" class="val">--</div><div>Heart Rate</div></div>
+        <div class="card"><div id="hr" class="val">--</div><div class="label">BPM</div></div>
+        <div class="card"><div id="steps" class="val">--</div><div class="label">Steps</div></div>
     </div>
 
-    <div id="log">Log: Awaiting Command...</div>
+    <div id="log">Status: Awaiting Handshake...</div>
 
     <script>
         const logger = (m) => { 
@@ -34,11 +35,11 @@
             try {
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb', 'battery_service']
+                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb']
                 });
 
                 const server = await device.gatt.connect();
-                logger("CONNECTED");
+                logger("CONNECTED TO WATCH");
 
                 const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
@@ -47,37 +48,42 @@
                 await notifyChar.startNotifications();
                 
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
-                    const val = e.target.value;
+                    const data = e.target.value;
                     let hex = "";
-                    for (let i = 0; i < val.byteLength; i++) {
-                        hex += val.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
+                    for (let i = 0; i < data.byteLength; i++) {
+                        hex += data.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
                     }
                     logger("INCOMING: " + hex);
 
-                    // F5LE HR Parser: Usually the 8th or 12th byte in a 13-byte packet
-                    if (val.byteLength >= 8) {
-                        const hrValue = val.getUint8(val.byteLength - 1);
-                        if (hrValue > 40 && hrValue < 210) document.getElementById('hr').innerText = hrValue;
+                    // Decode Logic: Look for HR in 13-byte packets
+                    if (data.byteLength >= 7) {
+                        const hr = data.getUint8(data.byteLength - 1);
+                        if (hr > 45 && hr < 210) document.getElementById('hr').innerText = hr;
+                        
+                        // Steps are usually bytes 5, 6, 7 in the sync packet
+                        const steps = (data.getUint8(4) << 16) | (data.getUint8(5) << 8) | data.getUint8(6);
+                        if (steps > 0 && steps < 99999) document.getElementById('steps').innerText = steps;
                     }
                 });
 
-                // THE "FORCE" SEQUENCE
-                // We send a Login followed by a Live HR Request
-                const login = new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]);
-                const hrRequest = new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]);
+                // THE MASTER HANDSHAKE (F5 Protocol)
+                // 1. Send Login Key
+                logger("SENDING AUTH KEY...");
+                await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]));
 
-                logger("SENDING LOGIN...");
-                await writeChar.writeValue(login);
-                
+                // 2. Request Real-time Stream
                 setTimeout(async () => {
-                    logger("SENDING HR START...");
-                    await writeChar.writeValue(hrRequest);
+                    logger("REQUESTING SENSOR STREAM...");
+                    await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
                 }, 1000);
 
-                // Keep-alive loop to prevent the watch from timing out
+                // 3. Keep-alive Loop (Crucial!)
                 setInterval(async () => {
-                    try { await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01])); } catch(e) {}
-                }, 5000);
+                    try {
+                        // This "pings" the watch so it doesn't close the fec8 pipe
+                        await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x32, 0x80, 0x01]));
+                    } catch(err) {}
+                }, 4000);
 
             } catch (err) {
                 logger("ERROR: " + err.message);
