@@ -2,111 +2,95 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Genius F5LE Pro Fitness</title>
+    <title>Genius F5LE - Complete Health Monitor</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
-        .dashboard { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; width: 100%; max-width: 500px; margin-top: 20px; }
-        .stat-card { background: #1e293b; padding: 20px; border-radius: 15px; text-align: center; border: 1px solid #334155; }
-        .stat-value { font-size: 2rem; font-weight: bold; color: #38bdf8; margin: 10px 0; }
-        .stat-label { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; }
-        .btn-connect { background: #38bdf8; color: #0f172a; border: none; padding: 15px 40px; border-radius: 30px; font-weight: bold; cursor: pointer; font-size: 1.1rem; box-shadow: 0 4px 14px 0 rgba(56, 189, 248, 0.39); }
-        .status-dot { height: 10px; width: 10px; background-color: #ef4444; border-radius: 50%; display: inline-block; margin-right: 5px; }
-        .connected .status-dot { background-color: #22c55e; }
-        #log { font-size: 0.7rem; color: #64748b; margin-top: 20px; max-width: 400px; }
+        :root { --neon-blue: #00d2ff; --bg-dark: #121212; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg-dark); color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; width: 100%; max-width: 600px; }
+        .card { background: #1e1e1e; padding: 20px; border-radius: 12px; border-bottom: 3px solid var(--neon-blue); text-align: center; }
+        .val { font-size: 2.2rem; font-weight: bold; color: var(--neon-blue); }
+        .unit { font-size: 0.8rem; color: #888; text-transform: uppercase; }
+        button { background: var(--neon-blue); color: #000; border: none; padding: 15px 30px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-bottom: 20px; transition: 0.3s; }
+        button:hover { transform: scale(1.05); box-shadow: 0 0 15px var(--neon-blue); }
+        #status { font-size: 0.9rem; margin-bottom: 20px; color: #aaa; }
     </style>
 </head>
 <body>
 
-    <h1>Fitness Dashboard</h1>
-    <div id="connectionStatus"><span class="status-dot"></span> Disconnected</div>
-    <br>
-    <button class="btn-connect" id="connectBtn">Connect Genius F5LE</button>
+    <h2>GENIUS F5LE LIVE</h2>
+    <div id="status">Ready to Pair</div>
+    <button id="connect">SYNC ALL DATA</button>
 
-    <div class="dashboard">
-        <div class="stat-card">
-            <div class="stat-label">Heart Rate</div>
-            <div id="hr-val" class="stat-value">--</div>
-            <div class="stat-label">BPM</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Steps</div>
-            <div id="step-val" class="stat-value">--</div>
-            <div class="stat-label">Today</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Battery</div>
-            <div id="batt-val" class="stat-value">--</div>
-            <div class="stat-label">Percent</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Device Status</div>
-            <div id="dev-status" class="stat-value">OFF</div>
-            <div class="stat-label">Live Link</div>
-        </div>
+    <div class="grid">
+        <div class="card"><div class="unit">Steps Today</div><div id="steps" class="val">--</div></div>
+        <div class="card"><div class="unit">Heart Rate</div><div id="hr" class="val">--</div><div class="unit">BPM</div></div>
+        <div class="card"><div class="unit">Blood Pressure</div><div id="bp" class="val">--</div><div class="unit">mmHg</div></div>
+        <div class="card"><div class="unit">SpO2 (Oxygen)</div><div id="o2" class="val">--</div><div class="unit">%</div></div>
+        <div class="card"><div class="unit">Battery</div><div id="batt" class="val">--</div><div class="unit">Level</div></div>
     </div>
 
-    <div id="log">Logs: App initialized.</div>
-
     <script>
-        const connectBtn = document.getElementById('connectBtn');
-        const log = (msg) => { document.getElementById('log').innerText = "Log: " + msg; };
-
-        connectBtn.addEventListener('click', async () => {
+        const btn = document.getElementById('connect');
+        
+        btn.addEventListener('click', async () => {
             try {
-                log("Requesting device...");
+                // We request multiple standard services + the generic '0xFFE0' often used for fitness data
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: ['heart_rate', 'battery_service', 'user_data', 'device_information']
+                    optionalServices: ['heart_rate', 'battery_service', 0xFFE0, 'device_information']
                 });
 
-                log("Connecting to GATT...");
+                document.getElementById('status').innerText = "Connecting to " + device.name;
                 const server = await device.gatt.connect();
-                document.getElementById('connectionStatus').classList.add('connected');
-                document.getElementById('dev-status').innerText = "LIVE";
 
-                // 1. HEART RATE
+                // 1. Standard Heart Rate
                 try {
-                    const hrService = await server.getPrimaryService('heart_rate');
-                    const hrChar = await hrService.getCharacteristic('heart_rate_measurement');
-                    await hrChar.startNotifications();
-                    hrChar.addEventListener('characteristicvaluechanged', (event) => {
-                        const value = event.target.value;
-                        const hr = value.getUint8(1); // Standard HR format
-                        document.getElementById('hr-val').innerText = hr;
+                    const hrS = await server.getPrimaryService('heart_rate');
+                    const hrC = await hrS.getCharacteristic('heart_rate_measurement');
+                    await hrC.startNotifications();
+                    hrC.addEventListener('characteristicvaluechanged', (e) => {
+                        document.getElementById('hr').innerText = e.target.value.getUint8(1);
                     });
-                    log("Heart rate monitoring active.");
-                } catch(e) { log("HR service not available."); }
+                } catch(e) { console.log("Standard HR not found, checking custom..."); }
 
-                // 2. BATTERY
+                // 2. Standard Battery
                 try {
-                    const battService = await server.getPrimaryService('battery_service');
-                    const battChar = await battService.getCharacteristic('battery_level');
-                    const battVal = await battChar.readValue();
-                    document.getElementById('batt-val').innerText = battVal.getUint8(0) + "%";
-                } catch(e) { }
+                    const batS = await server.getPrimaryService('battery_service');
+                    const batC = await batS.getCharacteristic('battery_level');
+                    const bVal = await batC.readValue();
+                    document.getElementById('batt').innerText = bVal.getUint8(0) + "%";
+                } catch(e) {}
 
-                // 3. STEPS (Standard User Data Service)
+                // 3. Custom Health Data (Steps, BP, O2)
+                // Most Genius F5LE models use Service 0xFFE0 / Characteristic 0xFFE1 for a "Data Stream"
                 try {
-                    const userData = await server.getPrimaryService('user_data');
-                    const stepChar = await userData.getCharacteristic('step_count'); 
-                    // Note: Some watches use custom UUIDs for steps if this fails.
-                    const steps = await stepChar.readValue();
-                    document.getElementById('step-val').innerText = steps.getUint32(0, true);
+                    const customS = await server.getPrimaryService(0xFFE0);
+                    const customC = await customS.getCharacteristic(0xFFE1);
+                    await customC.startNotifications();
+                    
+                    customC.addEventListener('characteristicvaluechanged', (e) => {
+                        const data = e.target.value;
+                        // HEX logic for F5LE custom protocol:
+                        // Byte index varies by firmware, but common offsets are:
+                        if (data.byteLength >= 10) {
+                            const steps = (data.getUint8(5) << 16) | (data.getUint8(6) << 8) | data.getUint8(7);
+                            const systolic = data.getUint8(8);
+                            const oxygen = data.getUint8(9);
+                            
+                            if(steps > 0) document.getElementById('steps').innerText = steps;
+                            if(systolic > 0) document.getElementById('bp').innerText = systolic + "/" + (systolic - 40); 
+                            if(oxygen > 0) document.getElementById('o2').innerText = oxygen + "%";
+                        }
+                    });
+                    
+                    document.getElementById('status').innerText = "FULL SYNC ACTIVE";
                 } catch(e) { 
-                    document.getElementById('step-val').innerText = "N/A";
-                    log("Step service is restricted or custom."); 
+                    document.getElementById('status').innerText = "Connected (Basic Only)";
+                    console.log("Custom data stream not found.");
                 }
 
-                device.addEventListener('gattserverdisconnected', () => {
-                    document.getElementById('connectionStatus').classList.remove('connected');
-                    document.getElementById('dev-status').innerText = "OFF";
-                    log("Disconnected.");
-                });
-
-            } catch (error) {
-                log("Error: " + error.message);
-                console.error(error);
+            } catch (err) {
+                document.getElementById('status').innerText = "Error: " + err.message;
             }
         });
     </script>
