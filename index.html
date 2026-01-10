@@ -1,27 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>F5LE Nuclear Sync</title>
+    <title>Genius F5LE - Sequential Unlock</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: auto; }
-        .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #444; }
-        .val { font-size: 3rem; color: #facc15; font-weight: bold; }
-        button { background: #facc15; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; }
+        .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #333; }
+        .val { font-size: 3.5rem; color: #22c55e; font-weight: bold; }
+        button { background: #22c55e; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; }
         #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 15px; height: 180px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE NUCLEAR SYNC</h1>
-    <button id="go">FORCE REFRESH & SYNC</button>
+    <h1>F5LE SEQUENTIAL SYNC</h1>
+    <button id="go">START SEQUENTIAL UNLOCK</button>
 
     <div class="grid">
         <div class="card"><div id="hr" class="val">--</div><div>BPM</div></div>
-        <div class="card"><div id="steps" class="val">--</div><div>Steps Today</div></div>
+        <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
     </div>
 
-    <div id="log">Log: Ready for Nuclear Reset...</div>
+    <div id="log">Log: Ready...</div>
 
     <script>
         const logger = (m) => { 
@@ -32,49 +32,48 @@
 
         document.getElementById('go').onclick = async () => {
             try {
-                // We expand the search to find ANY hidden health service
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: [
-                        '0000fee7-0000-1000-8000-00805f9b34fb', 
-                        0xFFE0, 
-                        'heart_rate',
-                        '00001801-0000-1000-8000-00805f9b34fb' // Generic Attribute
-                    ]
+                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb']
                 });
 
                 const server = await device.gatt.connect();
                 logger("CONNECTED");
 
-                // 1. Target the 'FFE0' Service (Common for F5 watches to bypass security)
-                try {
-                    const ffe0 = await server.getPrimaryService(0xFFE0);
-                    const ffe1 = await ffe0.getCharacteristic(0xFFE1);
-                    await ffe1.startNotifications();
-                    ffe1.addEventListener('characteristicvaluechanged', (e) => {
-                        logger("ALT DATA: " + e.target.value.getUint8(0));
-                    });
-                    logger("Alternative Pipe (FFE0) Open.");
-                } catch(e) { logger("FFE0 not found."); }
-
-                // 2. Main Service Reset
                 const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
                 await notifyChar.startNotifications();
+                
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
+                    const data = e.target.value;
                     let hex = "";
-                    for(let i=0; i<e.target.value.byteLength; i++) hex += e.target.value.getUint8(i).toString(16).toUpperCase() + " ";
-                    logger("INCOMING: " + hex);
+                    for (let i = 0; i < data.byteLength; i++) {
+                        hex += data.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
+                    }
+                    logger("INCOMING DATA: " + hex);
+
+                    // If data length is 13 or 20, it's likely a health packet
+                    if (data.byteLength >= 7) {
+                        const bpm = data.getUint8(data.byteLength - 1);
+                        if (bpm > 40 && bpm < 210) document.getElementById('hr').innerText = bpm;
+                    }
                 });
 
-                // 3. Send "Factory Reset" Command followed by "Sync"
-                // AB 00 04 FF 32 80 01 (Sync Steps)
-                // AB 00 04 FF 31 09 01 (Start Real-time HR)
-                logger("SENDING RESET-SYNC SEQUENCE...");
-                await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x32, 0x80, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
-                await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
+                // THE SEQUENTIAL UNLOCK
+                const codes = [
+                    [0x01],                         // Simple Sync
+                    [0xAB, 0x01],                   // Short Auth
+                    [0x02],                         // Health Toggle
+                    [0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01] // Deep Sync
+                ];
+
+                for (let code of codes) {
+                    logger("Trying Code: " + code.map(x => x.toString(16)).join(' '));
+                    await writeChar.writeValue(new Uint8Array(code));
+                    await new Promise(r => setTimeout(r, 1500)); // Wait for watch response
+                }
 
             } catch (err) {
                 logger("ERROR: " + err.message);
