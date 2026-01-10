@@ -1,21 +1,22 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>F5LE Pro - Deep Handshake</title>
+    <title>Genius F5LE - Command Mode</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 500px; margin: auto; }
-        .card { background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; }
-        .val { font-size: 2.2rem; color: #ff0055; font-weight: bold; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: auto; }
+        .card { background: #111; padding: 20px; border-radius: 12px; border: 2px solid #333; }
+        .val { font-size: 2.5rem; color: #00ffcc; font-weight: bold; text-shadow: 0 0 10px #00ffcc; }
         .label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
-        button { background: #ff0055; color: #fff; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-bottom: 20px; box-shadow: 0 0 15px #ff0055; }
-        #raw { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 150px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
+        button { background: #00ffcc; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:hover { background: #fff; transform: scale(1.05); }
+        #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 150px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE DEEP SYNC</h1>
-    <button id="go">CONNECT & UNLOCK SENSORS</button>
+    <h1>F5LE COMMAND SYNC</h1>
+    <button id="go">ACTIVATE SENSORS</button>
 
     <div class="grid">
         <div class="card"><div id="steps-box" class="val">--</div><div class="label">Steps</div></div>
@@ -24,11 +25,11 @@
         <div class="card"><div id="batt-box" class="val">--</div><div class="label">Battery</div></div>
     </div>
 
-    <div id="raw">Log: Initializing...</div>
+    <div id="log">Log: Awaiting Connection...</div>
 
     <script>
-        const log = (m) => { 
-            const div = document.getElementById('raw');
+        const logger = (m) => { 
+            const div = document.getElementById('log');
             div.innerHTML += `<div>> ${m}</div>`; 
             div.scrollTop = div.scrollHeight;
         };
@@ -41,15 +42,14 @@
                 });
 
                 const server = await device.gatt.connect();
-                log("CONNECTED");
+                logger("WATCH CONNECTED");
 
                 const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
-                // Enable Notifications BEFORE sending commands
                 await notifyChar.startNotifications();
-                log("PIPE OPEN: Awaiting data...");
+                logger("LISTENING FOR DATA...");
 
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
                     const data = e.target.value;
@@ -57,35 +57,37 @@
                     for (let i = 0; i < data.byteLength; i++) {
                         hex += data.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
                     }
-                    log("INCOMING: " + hex);
+                    logger("INCOMING: " + hex);
 
-                    // Decode Logic
+                    // Decode Packet
                     if (data.byteLength >= 5) {
+                        // Heart Rate usually sits in the last few bytes of a health packet
                         const hr = data.getUint8(data.byteLength - 1);
-                        if (hr > 40 && hr < 220) document.getElementById('hr-box').innerText = hr;
+                        if (hr > 40 && hr < 200) document.getElementById('hr-box').innerText = hr;
                     }
                 });
 
-                // THE "FORCE WAKEUP" SEQUENCE
-                // We send these one by one with a small delay
-                const send = async (bytes) => {
-                    await writeChar.writeValue(new Uint8Array(bytes));
-                    log("SENT: " + bytes.map(b => b.toString(16).toUpperCase()).join(' '));
-                    await new Promise(r => setTimeout(r, 500));
-                };
+                // FULL HANDSHAKE COMMANDS
+                // These are structured 16-byte packets often required by F5LE firmware
+                const syncSteps = new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x32, 0x80, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+                const startHR = new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
 
-                await send([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]); // Login Command
-                await send([0x01]); // Request Steps
-                await send([0x02]); // Request HR
+                logger("SENDING LOGIN...");
+                await writeChar.writeValue(syncSteps);
                 
-                // Get Battery
+                setTimeout(async () => {
+                    logger("TRIGGERING HR SENSOR...");
+                    await writeChar.writeValue(startHR);
+                }, 1000);
+
+                // Battery
                 const bS = await server.getPrimaryService('battery_service');
                 const bC = await bS.getCharacteristic('battery_level');
                 const bV = await bC.readValue();
                 document.getElementById('batt-box').innerText = bV.getUint8(0) + "%";
 
-            } catch (e) {
-                log("ERROR: " + e.message);
+            } catch (err) {
+                logger("ERROR: " + err.message);
             }
         };
     </script>
