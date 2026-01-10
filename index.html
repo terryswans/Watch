@@ -1,27 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>F5LE Universal Unlock</title>
+    <title>F5LE Secure Sync v20</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: auto; }
         .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #333; }
         .val { font-size: 3.5rem; color: #00ffcc; font-weight: bold; }
-        button { background: #00ffcc; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; }
+        button { background: #00ffcc; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-top: 10px; }
         #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 15px; height: 180px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE BROADCAST SYNC</h1>
-    <button id="go">INITIALIZE ALL CHANNELS</button>
+    <h1>F5LE PULSE SYNC</h1>
+    <button id="go">CONNECT & VIBRATE TEST</button>
 
     <div class="grid">
         <div class="card"><div id="hr" class="val">--</div><div>BPM</div></div>
         <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
     </div>
 
-    <div id="log">Log: Ready to broadcast...</div>
+    <div id="log">Log: Initializing...</div>
 
     <script>
         const logger = (m) => { 
@@ -30,10 +30,9 @@
             d.scrollTop = d.scrollHeight;
         };
 
-        // Creates a 20-byte packet for maximum compatibility
-        function createPacket(bytes) {
+        function create20BytePacket(data) {
             let p = new Uint8Array(20);
-            for (let i = 0; i < bytes.length; i++) p[i] = bytes[i];
+            for (let i = 0; i < data.length; i++) p[i] = data[i];
             return p;
         }
 
@@ -52,7 +51,6 @@
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
                 await notifyChar.startNotifications();
-                logger("LISTENING ON FEC8...");
                 
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = e.target.value;
@@ -60,32 +58,24 @@
                     for (let i = 0; i < val.byteLength; i++) {
                         hex += val.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
                     }
-                    logger("INCOMING: " + hex);
-
-                    // If we see data, try to pull HR from the end of the packet
-                    if (val.byteLength >= 7) {
-                        const hr = val.getUint8(val.byteLength - 1);
-                        if (hr > 40 && hr < 220) document.getElementById('hr').innerText = hr;
-                    }
+                    logger("INCOMING DATA: " + hex);
                 });
 
-                // BROADCAST SEQUENCE
-                // We send three different "Hello" commands used by different F5LE manufacturers
-                const sequences = [
-                    [0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00], // Type A Login
-                    [0x01],                                     // Type B Toggle
-                    [0xEA, 0x01, 0x00, 0x00, 0x00, 0x00]        // Type C Sync
-                ];
+                // TEST: MAKE WATCH VIBRATE (Common command for F5LE)
+                logger("SENDING VIBRATE COMMAND...");
+                const vibCmd = create20BytePacket([0xAB, 0x00, 0x04, 0xFF, 0x33, 0x03, 0x01]);
+                await writeChar.writeValueWithResponse(vibCmd);
 
-                for(let seq of sequences) {
-                    await writeChar.writeValue(createPacket(seq));
-                    logger("Sent Sync Pattern: " + seq[0].toString(16).toUpperCase());
-                    await new Promise(r => setTimeout(r, 800)); // Delay between attempts
-                }
+                // AUTH & HR START
+                setTimeout(async () => {
+                    logger("SENDING AUTH...");
+                    await writeChar.writeValueWithResponse(create20BytePacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]));
+                }, 1000);
 
-                // Heart Rate Start Command
-                await writeChar.writeValue(createPacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
-                logger("Sent HR Activation");
+                setTimeout(async () => {
+                    logger("REQUESTING HR STREAM...");
+                    await writeChar.writeValueWithResponse(create20BytePacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
+                }, 2000);
 
             } catch (err) {
                 logger("ERROR: " + err.message);
