@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Genius F5LE - Smart Sync</title>
+    <title>Genius F5LE - Global Sync</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 500px; margin: auto; }
@@ -9,13 +9,13 @@
         .val { font-size: 2.2rem; color: #00ffcc; font-weight: bold; }
         .label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
         button { background: #00ffcc; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-bottom: 20px; }
-        #raw { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 80px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
+        #raw { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 120px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE SMART SYNC</h1>
-    <button id="go">CONNECT & SYNC</button>
+    <h1>F5LE GLOBAL SYNC</h1>
+    <button id="go">FORCE INITIALIZE WATCH</button>
 
     <div class="grid">
         <div class="card"><div id="steps-box" class="val">--</div><div class="label">Steps</div></div>
@@ -24,10 +24,14 @@
         <div class="card"><div id="batt-box" class="val">--</div><div class="label">Battery</div></div>
     </div>
 
-    <div id="raw">Log: Ready for connection...</div>
+    <div id="raw">Log: Click the button above...</div>
 
     <script>
-        const log = (m) => { document.getElementById('raw').innerHTML += `<div>> ${m}</div>`; };
+        const log = (m) => { 
+            const div = document.getElementById('raw');
+            div.innerHTML += `<div>> ${m}</div>`; 
+            div.scrollTop = div.scrollHeight;
+        };
 
         document.getElementById('go').onclick = async () => {
             try {
@@ -37,14 +41,15 @@
                 });
 
                 const server = await device.gatt.connect();
-                log("CONNECTED TO GATT");
+                log("CONNECTED: Searching for services...");
 
                 const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
                 await notifyChar.startNotifications();
-                
+                log("Notifications Active. Sending Wake-up...");
+
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
                     const data = e.target.value;
                     let hex = "";
@@ -53,32 +58,33 @@
                     }
                     log("INCOMING: " + hex);
 
-                    // --- THE SMART PARSER ---
-                    
-                    // 1. Check for Step Packet (Usually starts with 0x07 or 0x01)
-                    if (data.byteLength >= 7 && (data.getUint8(0) === 0x07 || data.getUint8(0) === 0x01)) {
-                        const steps = (data.getUint8(4) << 16) | (data.getUint8(5) << 8) | data.getUint8(6);
-                        if (steps < 100000) document.getElementById('steps-box').innerText = steps;
-                    }
-
-                    // 2. Check for Health Packet (Usually contains HR in later bytes)
-                    if (data.byteLength >= 10) {
-                        const hr = data.getUint8(7);
-                        const sys = data.getUint8(8);
+                    // Logic for Health Data
+                    if (data.byteLength >= 7) {
+                        // Check if it's Heart Rate data
+                        const hr = data.getUint8(data.byteLength - 1);
                         if (hr > 40 && hr < 220) document.getElementById('hr-box').innerText = hr;
-                        if (sys > 50 && sys < 200) document.getElementById('bp-box').innerText = sys + "/80";
+                        
+                        // Check if it's Steps
+                        const steps = (data.getUint8(1) << 16) | (data.getUint8(2) << 8) | data.getUint8(3);
+                        if (steps > 0 && steps < 100000) document.getElementById('steps-box').innerText = steps;
                     }
                 });
 
-                // Send Activation commands every 4 seconds to keep data flowing
-                setInterval(async () => {
-                    try {
-                        await writeChar.writeValue(new Uint8Array([0x01, 0x00])); // Sync steps
-                        await writeChar.writeValue(new Uint8Array([0x02, 0x00])); // Sync health
-                    } catch(err) {}
-                }, 4000);
+                // THE WAKE-UP SEQUENCE
+                // We send multiple different "Hello" commands to find the one the F5LE likes
+                const commands = [
+                    new Uint8Array([0x01]),       // Standard Sync
+                    new Uint8Array([0xAB, 0x01]), // Legacy Handshake
+                    new Uint8Array([0x02]),       // HR Start
+                    new Uint8Array([0x03, 0x01])  // Real-time Push
+                ];
 
-                // Get Battery correctly
+                for (let cmd of commands) {
+                    await writeChar.writeValue(cmd);
+                    log("Sent command: " + Array.from(cmd).map(b => b.toString(16)).join(' '));
+                }
+
+                // Battery Update
                 const bS = await server.getPrimaryService('battery_service');
                 const bC = await bS.getCharacteristic('battery_level');
                 const bV = await bC.readValue();
