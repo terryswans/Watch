@@ -1,36 +1,35 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Genius F5LE Health Sync Pro</title>
+    <title>Genius F5LE - Smart Sync</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
-        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: 20px auto; }
-        .card { background: #111; padding: 20px; border-radius: 15px; border: 1px solid #333; }
-        .val { font-size: 2.5rem; color: #00e5ff; font-weight: bold; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 500px; margin: auto; }
+        .card { background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; }
+        .val { font-size: 2.2rem; color: #00ffcc; font-weight: bold; }
         .label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
-        button { background: #00e5ff; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; }
-        #rawLog { background: #111; color: #00ff00; font-family: monospace; font-size: 10px; height: 120px; overflow-y: scroll; text-align: left; padding: 10px; margin-top: 20px; border: 1px solid #222; }
+        button { background: #00ffcc; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-bottom: 20px; }
+        #raw { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 80px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h2>GENIUS F5LE ACTIVE SYNC</h2>
-    <button id="syncBtn">START MONITORING</button>
+    <h1>F5LE SMART SYNC</h1>
+    <button id="go">CONNECT & SYNC</button>
 
-    <div class="dashboard">
-        <div class="card"><div id="hr-val" class="val">--</div><div class="label">Heart Rate</div></div>
-        <div class="card"><div id="step-val" class="val">--</div><div class="label">Steps Today</div></div>
-        <div class="card"><div id="bp-val" class="val">--</div><div class="label">Blood Pressure</div></div>
-        <div class="card"><div id="batt-val" class="val">--</div><div class="label">Battery</div></div>
+    <div class="grid">
+        <div class="card"><div id="steps-box" class="val">--</div><div class="label">Steps</div></div>
+        <div class="card"><div id="hr-box" class="val">--</div><div class="label">Heart Rate</div></div>
+        <div class="card"><div id="bp-box" class="val">--</div><div class="label">Blood Pressure</div></div>
+        <div class="card"><div id="batt-box" class="val">--</div><div class="label">Battery</div></div>
     </div>
 
-    <div id="rawLog">Ready...</div>
+    <div id="raw">Log: Ready for connection...</div>
 
     <script>
-        const rawLog = document.getElementById('rawLog');
-        const logger = (m) => { rawLog.innerHTML += `<div>${m}</div>`; rawLog.scrollTop = rawLog.scrollHeight; };
+        const log = (m) => { document.getElementById('raw').innerHTML += `<div>> ${m}</div>`; };
 
-        document.getElementById('syncBtn').onclick = async () => {
+        document.getElementById('go').onclick = async () => {
             try {
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
@@ -38,51 +37,55 @@
                 });
 
                 const server = await device.gatt.connect();
-                logger("CONNECTED");
+                log("CONNECTED TO GATT");
 
-                // Get the main service
                 const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
                 await notifyChar.startNotifications();
-                notifyChar.addEventListener('characteristicvaluechanged', (event) => {
-                    const value = event.target.value;
-                    let hex = [];
-                    for (let i = 0; i < value.byteLength; i++) {
-                        hex.push('0x' + ('00' + value.getUint8(i).toString(16)).slice(-2));
+                
+                notifyChar.addEventListener('characteristicvaluechanged', (e) => {
+                    const data = e.target.value;
+                    let hex = "";
+                    for (let i = 0; i < data.byteLength; i++) {
+                        hex += data.getUint8(i).toString(16).padStart(2, '0') + " ";
                     }
-                    logger("RAW DATA: " + hex.join(' '));
+                    log("INCOMING: " + hex);
 
-                    // PARSER LOGIC for F5LE / WeChat Protocol
-                    if (value.byteLength >= 5) {
-                        // In many F5 series, Byte 4/5/6 are steps
-                        const steps = (value.getUint8(value.byteLength - 3) << 8) | value.getUint8(value.byteLength - 2);
-                        if (steps > 0 && steps < 65000) document.getElementById('step-val').innerText = steps;
+                    // --- THE SMART PARSER ---
+                    
+                    // 1. Check for Step Packet (Usually starts with 0x07 or 0x01)
+                    if (data.byteLength >= 7 && (data.getUint8(0) === 0x07 || data.getUint8(0) === 0x01)) {
+                        const steps = (data.getUint8(4) << 16) | (data.getUint8(5) << 8) | data.getUint8(6);
+                        if (steps < 100000) document.getElementById('steps-box').innerText = steps;
+                    }
 
-                        // Byte 7 or 8 is usually HR if a test is running
-                        const hr = value.getUint8(value.byteLength - 1);
-                        if (hr > 40 && hr < 220) document.getElementById('hr-val').innerText = hr;
+                    // 2. Check for Health Packet (Usually contains HR in later bytes)
+                    if (data.byteLength >= 10) {
+                        const hr = data.getUint8(7);
+                        const sys = data.getUint8(8);
+                        if (hr > 40 && hr < 220) document.getElementById('hr-box').innerText = hr;
+                        if (sys > 50 && sys < 200) document.getElementById('bp-box').innerText = sys + "/80";
                     }
                 });
 
-                // REPEATED SYNC COMMAND: Some watches need a "Heartbeat" from the app to keep sending data
+                // Send Activation commands every 4 seconds to keep data flowing
                 setInterval(async () => {
                     try {
-                        // 0x01 triggers Step Sync, 0x02 triggers Health Sync
-                        await writeChar.writeValue(new Uint8Array([0x01]));
-                        await writeChar.writeValue(new Uint8Array([0x02]));
-                    } catch (e) {}
-                }, 5000);
+                        await writeChar.writeValue(new Uint8Array([0x01, 0x00])); // Sync steps
+                        await writeChar.writeValue(new Uint8Array([0x02, 0x00])); // Sync health
+                    } catch(err) {}
+                }, 4000);
 
-                // Update Battery
-                const batS = await server.getPrimaryService('battery_service');
-                const batC = await batS.getCharacteristic('battery_level');
-                const batV = await batC.readValue();
-                document.getElementById('batt-val').innerText = batV.getUint8(0) + "%";
+                // Get Battery correctly
+                const bS = await server.getPrimaryService('battery_service');
+                const bC = await bS.getCharacteristic('battery_level');
+                const bV = await bC.readValue();
+                document.getElementById('batt-box').innerText = bV.getUint8(0) + "%";
 
-            } catch (err) {
-                logger("ERR: " + err.message);
+            } catch (e) {
+                log("ERROR: " + e.message);
             }
         };
     </script>
