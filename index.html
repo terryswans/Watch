@@ -2,103 +2,98 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Genius F5LE - Full Health Access</title>
+    <title>Genius F5LE - Full Data Sync</title>
     <style>
-        body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 400px; margin: 20px auto; }
-        .box { background: #333; padding: 15px; border-radius: 10px; border: 1px solid #444; }
-        .val { font-size: 1.8rem; color: #00ffcc; font-weight: bold; }
-        .label { font-size: 0.7rem; color: #aaa; text-transform: uppercase; }
-        button { background: #00ffcc; color: black; border: none; padding: 15px 30px; border-radius: 5px; font-weight: bold; cursor: pointer; }
-        #log { font-size: 0.7rem; color: #666; margin-top: 20px; background: #000; padding: 10px; text-align: left; overflow-y: scroll; height: 100px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; max-width: 500px; margin: 20px auto; }
+        .card { background: #1e1e1e; padding: 25px; border-radius: 15px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .val { font-size: 2.5rem; color: #00d2ff; font-weight: bold; margin: 5px 0; }
+        .label { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        button { background: linear-gradient(135deg, #00d2ff, #3a7bd5); color: white; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; font-size: 1rem; }
+        #log { font-family: monospace; font-size: 10px; color: #555; margin-top: 30px; text-align: left; background: #000; padding: 10px; border-radius: 5px; height: 100px; overflow-y: auto; }
     </style>
 </head>
 <body>
 
-    <h2>GENIUS F5LE DEEP SYNC</h2>
-    <button id="scanBtn">SEARCH FOR ALL SERVICES</button>
-    <div id="status" style="margin: 15px; color: #00ffcc;">Status: Not Connected</div>
+    <h1>Genius F5LE Pro</h1>
+    <p id="status">Ready to connect...</p>
+    <button id="syncBtn">CONNECT & SYNC ALL</button>
 
-    <div class="stat-grid">
-        <div class="box"><div class="label">Step Count</div><div id="steps" class="val">--</div></div>
-        <div class="box"><div class="label">Heart Rate</div><div id="hr" class="val">--</div></div>
-        <div class="box"><div class="label">Blood Pressure</div><div id="bp" class="val">--</div></div>
-        <div class="box"><div class="label">SpO2 Oxygen</div><div id="o2" class="val">--</div></div>
+    <div class="grid">
+        <div class="card"><div id="steps" class="val">0</div><div class="label">Steps Today</div></div>
+        <div class="card"><div id="hr" class="val">--</div><div class="label">Live Heart Rate</div></div>
+        <div class="card"><div id="bp" class="val">--</div><div class="label">Blood Pressure</div></div>
+        <div class="card"><div id="batt" class="val">--</div><div class="label">Watch Battery</div></div>
     </div>
 
-    <div id="log">Logs initialized...</div>
+    <div id="log">Device logs will appear here...</div>
 
     <script>
-        const log = (m) => { document.getElementById('log').innerHTML += `<div>${m}</div>`; };
-        
-        document.getElementById('scanBtn').onclick = async () => {
+        const syncBtn = document.getElementById('syncBtn');
+        const logger = (m) => { document.getElementById('log').innerHTML += `<div>> ${m}</div>`; };
+
+        syncBtn.onclick = async () => {
             try {
-                // We add the most common "Health" UUIDs used by Genius/FitPro/DaFit watches
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: [
-                        'heart_rate', 
-                        'battery_service',
-                        0xFFE0, // Common fitness data
-                        0xFEE7, // Common "Steps" for Chinese watches
-                        0x180D, // Heart Rate
-                        '0000fee7-0000-1000-8000-00805f9b34fb', // Step Service UUID
-                        '6e400001-b5a3-f393-e0a9-e50e24dcca9e'  // Nordic UART (All data stream)
-                    ]
+                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb', 'battery_service', 'heart_rate']
                 });
 
                 const server = await device.gatt.connect();
-                document.getElementById('status').innerText = "Status: DEEP CONNECTED";
-                log("Scanning all services...");
+                document.getElementById('status').innerText = "Connected: " + device.name;
+                logger("Connection established.");
 
-                const services = await server.getPrimaryServices();
+                // 1. Get the Main Fitness Service (FEE7)
+                const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
                 
-                for (const service of services) {
-                    log("Found Service: " + service.uuid);
-                    const characteristics = await service.getCharacteristics();
-                    
-                    for (const char of characteristics) {
-                        log(" -> Found Characteristic: " + char.uuid);
-                        
-                        // Check if it's a Notify characteristic (This is where "All Data" usually lives)
-                        if (char.properties.notify || char.properties.indicate) {
-                            await char.startNotifications();
-                            char.addEventListener('characteristicvaluechanged', handleData);
-                            log(" !! Listening to: " + char.uuid);
-                        }
-                    }
-                }
-            } catch (e) {
-                log("Error: " + e.message);
+                // 2. Setup Listener for Data (FEC8)
+                const dataChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
+                await dataChar.startNotifications();
+                dataChar.addEventListener('characteristicvaluechanged', handleData);
+                logger("Listening for health data stream...");
+
+                // 3. Send the "Sync" Command (FEC7)
+                // This hex code (0x01) tells the watch to push all stored data immediately
+                const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
+                const syncCmd = new Uint8Array([0x01]); 
+                await writeChar.writeValue(syncCmd);
+                logger("Sync command sent to watch.");
+
+                // 4. Get Battery (Optional)
+                try {
+                    const bS = await server.getPrimaryService('battery_service');
+                    const bC = await bS.getCharacteristic('battery_level');
+                    const bV = await bC.readValue();
+                    document.getElementById('batt').innerText = bV.getUint8(0) + "%";
+                } catch(e) {}
+
+            } catch (err) {
+                logger("Error: " + err.message);
             }
         };
 
         function handleData(event) {
             const data = event.target.value;
-            log("Data received! Bytes: " + data.byteLength);
+            logger("Packet received: " + data.byteLength + " bytes");
 
-            // This is the "Magic" parser for F5LE style watches
-            // Data is usually sent as a 10-20 byte packet
-            if (data.byteLength >= 7) {
-                // Standard Heart Rate (if from HR service)
-                if (data.byteLength == 2) {
-                    document.getElementById('hr').innerText = data.getUint8(1);
-                }
+            // F5LE DATA PARSER
+            // Standard data packet for FEE7 service:
+            if (data.byteLength >= 4) {
+                // Steps are usually bytes 1-3 in the WeChat protocol
+                const steps = (data.getUint8(1) << 16) | (data.getUint8(2) << 8) | data.getUint8(3);
+                if (steps > 0) document.getElementById('steps').innerText = steps.toLocaleString();
                 
-                // Generic Fitness Packet Parser
-                // Most F5LE watches send steps in byte 5, 6, 7
-                const steps = (data.getUint8(4) << 16) | (data.getUint8(5) << 8) | data.getUint8(6);
-                if (steps > 0 && steps < 100000) document.getElementById('steps').innerText = steps;
-
-                // Health data (BP/O2) often comes in bytes 8 and 9
+                // If it's a health packet (usually 10+ bytes)
                 if (data.byteLength >= 10) {
+                    const hr = data.getUint8(7);
                     const sys = data.getUint8(8);
-                    const o2 = data.getUint8(9);
-                    if (sys > 40) document.getElementById('bp').innerText = sys + "/80";
-                    if (o2 > 50) document.getElementById('o2').innerText = o2 + "%";
+                    const dia = data.getUint8(9);
+                    
+                    if (hr > 30) document.getElementById('hr').innerText = hr;
+                    if (sys > 40) document.getElementById('bp').innerText = `${sys}/${dia}`;
                 }
             }
         }
-    </script>
+    <\/script>
 </body>
 </html>
