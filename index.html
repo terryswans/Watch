@@ -1,27 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>F5LE Triple-Tap Sync</title>
+    <title>F5LE Checksum Sync</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: auto; }
         .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #333; }
-        .val { font-size: 3.5rem; color: #fbbf24; font-weight: bold; }
-        button { background: #fbbf24; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; font-size: 1.1rem; }
+        .val { font-size: 3.5rem; color: #00ffcc; font-weight: bold; }
+        button { background: #00ffcc; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; font-size: 1.1rem; box-shadow: 0 0 20px rgba(0,255,204,0.4); }
         #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 15px; height: 180px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE TRIPLE-TAP</h1>
-    <button id="go">FORCE INITIALIZE</button>
+    <h1>F5LE SECURE SYNC</h1>
+    <button id="go">AUTHENTICATE & START</button>
 
     <div class="grid">
         <div class="card"><div id="hr" class="val">--</div><div>BPM</div></div>
         <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
     </div>
 
-    <div id="log">Log: Ready to Sync...</div>
+    <div id="log">Log: Awaiting Secure Handshake...</div>
 
     <script>
         const logger = (m) => { 
@@ -30,11 +30,16 @@
             d.scrollTop = d.scrollHeight;
         };
 
-        // Create a 20-byte padded packet (Standard for many F5LE firmware versions)
-        function padPacket(arr) {
-            let b = new Uint8Array(20);
-            for(let i=0; i<arr.length; i++) b[i] = arr[i];
-            return b;
+        // Function to create a 20-byte packet with a Checksum at index 19
+        function createSecurePacket(data) {
+            let packet = new Uint8Array(20);
+            let checksum = 0;
+            for (let i = 0; i < data.length; i++) {
+                packet[i] = data[i];
+                checksum ^= data[i]; // XOR Checksum
+            }
+            packet[19] = checksum; // Place checksum in last byte
+            return packet;
         }
 
         document.getElementById('go').onclick = async () => {
@@ -51,39 +56,32 @@
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
-                // 1. OPEN THE PIPE FIRST
                 await notifyChar.startNotifications();
-                logger("NOTIFICATIONS ENABLED");
+                logger("TUNNEL OPEN - WAITING FOR DATA");
                 
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
-                    const data = e.target.value;
+                    const val = e.target.value;
                     let hex = "";
-                    for (let i = 0; i < data.byteLength; i++) {
-                        hex += data.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
+                    for (let i = 0; i < val.byteLength; i++) {
+                        hex += val.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
                     }
                     logger("INCOMING: " + hex);
 
-                    // If we get data, try to extract the BPM (usually byte 7-10)
-                    if (data.byteLength >= 7) {
-                        const hr = data.getUint8(data.byteLength - 1);
-                        if (hr > 40 && hr < 200) document.getElementById('hr').innerText = hr;
+                    // HR Parsing (Usually byte 7 or 8)
+                    if (val.byteLength >= 8) {
+                        const hr = val.getUint8(val.byteLength - 2); // Common for checksummed returns
+                        if (hr > 40 && hr < 210) document.getElementById('hr').innerText = hr;
                     }
                 });
 
-                // 2. THE TRIPLE-TAP SEQUENCE
-                // We send a specific sequence to "Unlock" the firmware
-                logger("SENDING AUTH TAP...");
-                await writeChar.writeValue(padPacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]));
+                // AUTHENTICATED HANDSHAKE
+                logger("SENDING SECURE AUTH...");
+                await writeChar.writeValue(createSecurePacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]));
                 
                 setTimeout(async () => {
-                    logger("SENDING STREAM TAP...");
-                    await writeChar.writeValue(padPacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
+                    logger("SENDING SECURE HR REQUEST...");
+                    await writeChar.writeValue(createSecurePacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
                 }, 1000);
-
-                setTimeout(async () => {
-                    logger("SENDING KEEPALIVE...");
-                    await writeChar.writeValue(padPacket([0xAB, 0x00, 0x04, 0xFF, 0x32, 0x80, 0x01]));
-                }, 2000);
 
             } catch (err) {
                 logger("ERROR: " + err.message);
