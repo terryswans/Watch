@@ -1,27 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Genius F5LE - Universal Unlocker</title>
+    <title>F5LE Master Stream</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 500px; margin: auto; }
         .card { background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333; }
-        .val { font-size: 2.5rem; color: #00ffcc; font-weight: bold; }
-        button { background: #00ffcc; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; margin-bottom: 20px; }
-        #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 180px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
+        .val { font-size: 3rem; color: #00ffcc; font-weight: bold; }
+        button { background: #00ffcc; color: #000; border: none; padding: 15px 40px; border-radius: 50px; font-weight: bold; cursor: pointer; }
+        #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 150px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE UNIVERSAL SYNC</h1>
-    <button id="go">SCAN & UNLOCK ALL DATA</button>
+    <h1>F5LE MASTER STREAM</h1>
+    <button id="go">FORCE DATA STREAM</button>
 
     <div class="grid">
         <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
         <div class="card"><div id="hr" class="val">--</div><div>Heart Rate</div></div>
     </div>
 
-    <div id="log">Log: Ready...</div>
+    <div id="log">Log: Awaiting Command...</div>
 
     <script>
         const logger = (m) => { 
@@ -34,52 +34,50 @@
             try {
                 const device = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb', 'battery_service', 0xFFE0, 'heart_rate']
+                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb', 'battery_service']
                 });
 
                 const server = await device.gatt.connect();
-                logger("CONNECTED. Finding all data paths...");
+                logger("CONNECTED");
 
-                const services = await server.getPrimaryServices();
+                const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
+                const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
+                const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
+
+                await notifyChar.startNotifications();
                 
-                for (const service of services) {
-                    logger("Checking Service: " + service.uuid);
-                    const chars = await service.getCharacteristics();
-                    
-                    for (const char of chars) {
-                        // If the characteristic allows notifications, open it!
-                        if (char.properties.notify || char.properties.indicate) {
-                            try {
-                                await char.startNotifications();
-                                char.addEventListener('characteristicvaluechanged', (e) => {
-                                    const val = e.target.value;
-                                    let hex = "";
-                                    for (let i = 0; i < val.byteLength; i++) {
-                                        hex += val.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
-                                    }
-                                    logger(`DATA [${char.uuid.substring(4,8)}]: ${hex}`);
-                                    
-                                    // Basic parser for incoming numbers
-                                    if (val.byteLength > 1) {
-                                        const lastByte = val.getUint8(val.byteLength - 1);
-                                        if (lastByte > 40 && lastByte < 200) document.getElementById('hr').innerText = lastByte;
-                                    }
-                                });
-                                logger("  - Listening to " + char.uuid.substring(4,8));
-                            } catch(e) {}
-                        }
-
-                        // Try to send a "Wake Up" to every writable characteristic
-                        if (char.properties.write || char.properties.writeWithoutResponse) {
-                            try {
-                                await char.writeValue(new Uint8Array([0x01]));
-                                await char.writeValue(new Uint8Array([0xAB, 0x01]));
-                                logger("  - Sent Wake-up to " + char.uuid.substring(4,8));
-                            } catch(e) {}
-                        }
+                notifyChar.addEventListener('characteristicvaluechanged', (e) => {
+                    const val = e.target.value;
+                    let hex = "";
+                    for (let i = 0; i < val.byteLength; i++) {
+                        hex += val.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
                     }
-                }
-                logger("SCAN COMPLETE. Start a test on the watch face now.");
+                    logger("INCOMING: " + hex);
+
+                    // F5LE HR Parser: Usually the 8th or 12th byte in a 13-byte packet
+                    if (val.byteLength >= 8) {
+                        const hrValue = val.getUint8(val.byteLength - 1);
+                        if (hrValue > 40 && hrValue < 210) document.getElementById('hr').innerText = hrValue;
+                    }
+                });
+
+                // THE "FORCE" SEQUENCE
+                // We send a Login followed by a Live HR Request
+                const login = new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]);
+                const hrRequest = new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]);
+
+                logger("SENDING LOGIN...");
+                await writeChar.writeValue(login);
+                
+                setTimeout(async () => {
+                    logger("SENDING HR START...");
+                    await writeChar.writeValue(hrRequest);
+                }, 1000);
+
+                // Keep-alive loop to prevent the watch from timing out
+                setInterval(async () => {
+                    try { await writeChar.writeValue(new Uint8Array([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01])); } catch(e) {}
+                }, 5000);
 
             } catch (err) {
                 logger("ERROR: " + err.message);
