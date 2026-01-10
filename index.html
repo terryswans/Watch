@@ -1,27 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Genius F5LE - Full Buffer Sync</title>
+    <title>F5LE Triple-Tap Sync</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: auto; }
         .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #333; }
-        .val { font-size: 3.5rem; color: #00ffcc; font-weight: bold; }
-        button { background: #00ffcc; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; font-size: 1.1rem; }
+        .val { font-size: 3.5rem; color: #fbbf24; font-weight: bold; }
+        button { background: #fbbf24; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; font-size: 1.1rem; }
         #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 15px; height: 180px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <h1>F5LE BUFFER SYNC</h1>
-    <button id="go">ACTIVATE DATA STREAM</button>
+    <h1>F5LE TRIPLE-TAP</h1>
+    <button id="go">FORCE INITIALIZE</button>
 
     <div class="grid">
-        <div class="card"><div id="hr" class="val">--</div><div>Heart Rate</div></div>
+        <div class="card"><div id="hr" class="val">--</div><div>BPM</div></div>
         <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
     </div>
 
-    <div id="log">Log: Waiting for device...</div>
+    <div id="log">Log: Ready to Sync...</div>
 
     <script>
         const logger = (m) => { 
@@ -30,11 +30,11 @@
             d.scrollTop = d.scrollHeight;
         };
 
-        // Function to create a valid 16-byte command
-        function makeCommand(cmdArray) {
-            let buffer = new Uint8Array(16);
-            for(let i=0; i < cmdArray.length; i++) buffer[i] = cmdArray[i];
-            return buffer;
+        // Create a 20-byte padded packet (Standard for many F5LE firmware versions)
+        function padPacket(arr) {
+            let b = new Uint8Array(20);
+            for(let i=0; i<arr.length; i++) b[i] = arr[i];
+            return b;
         }
 
         document.getElementById('go').onclick = async () => {
@@ -51,7 +51,9 @@
                 const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
                 const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
 
+                // 1. OPEN THE PIPE FIRST
                 await notifyChar.startNotifications();
+                logger("NOTIFICATIONS ENABLED");
                 
                 notifyChar.addEventListener('characteristicvaluechanged', (e) => {
                     const data = e.target.value;
@@ -61,25 +63,26 @@
                     }
                     logger("INCOMING: " + hex);
 
-                    // Parse Heart Rate (last byte of standard packets)
+                    // If we get data, try to extract the BPM (usually byte 7-10)
                     if (data.byteLength >= 7) {
-                        const hrVal = data.getUint8(data.byteLength - 1);
-                        if (hrVal > 40 && hrVal < 200) document.getElementById('hr').innerText = hrVal;
+                        const hr = data.getUint8(data.byteLength - 1);
+                        if (hr > 40 && hr < 200) document.getElementById('hr').innerText = hr;
                     }
                 });
 
-                // SENDING 16-BYTE BUFFERED COMMANDS
-                logger("SENDING AUTH...");
-                await writeChar.writeValue(makeCommand([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]));
-
+                // 2. THE TRIPLE-TAP SEQUENCE
+                // We send a specific sequence to "Unlock" the firmware
+                logger("SENDING AUTH TAP...");
+                await writeChar.writeValue(padPacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x0A, 0x00]));
+                
                 setTimeout(async () => {
-                    logger("TRIGGERING HR...");
-                    await writeChar.writeValue(makeCommand([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
+                    logger("SENDING STREAM TAP...");
+                    await writeChar.writeValue(padPacket([0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01]));
                 }, 1000);
 
                 setTimeout(async () => {
-                    logger("SYNCING STEPS...");
-                    await writeChar.writeValue(makeCommand([0xAB, 0x00, 0x04, 0xFF, 0x32, 0x80, 0x01]));
+                    logger("SENDING KEEPALIVE...");
+                    await writeChar.writeValue(padPacket([0xAB, 0x00, 0x04, 0xFF, 0x32, 0x80, 0x01]));
                 }, 2000);
 
             } catch (err) {
