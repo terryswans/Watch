@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>Genius F5LE Connect</h1>
+    <button id="btn">Pair Watch</button>
+    <p id="stat">Not connected</p>
+    <script>
+        document.getElementById('btn').onclick = async () => {
+            const dev = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'F5' }],
+                optionalServices: ['battery_service']
+            });
+            const server = await dev.gatt.connect();
+            document.getElementById('stat').innerText = "Connected to " + dev.name;
+        };
+    </script>
+</body>
+</html>
