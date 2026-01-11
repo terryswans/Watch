@@ -1,84 +1,77 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Genius F5LE - Sequential Unlock</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANPR Free Tier Test</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #000; color: #fff; text-align: center; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 500px; margin: auto; }
-        .card { background: #111; padding: 25px; border-radius: 15px; border: 1px solid #333; }
-        .val { font-size: 3.5rem; color: #22c55e; font-weight: bold; }
-        button { background: #22c55e; color: #000; border: none; padding: 20px 50px; border-radius: 50px; font-weight: bold; cursor: pointer; }
-        #log { background: #050505; color: #0f0; font-family: monospace; font-size: 11px; padding: 15px; height: 180px; overflow-y: auto; text-align: left; margin-top: 20px; border: 1px solid #222; }
+        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
+        video { width: 100%; max-width: 400px; border-radius: 10px; }
+        #log { margin-top: 20px; text-align: left; background: #222; padding: 10px; border-radius: 5px; }
+        .success { color: #00ff00; }
     </style>
 </head>
 <body>
-
-    <h1>F5LE SEQUENTIAL SYNC</h1>
-    <button id="go">START SEQUENTIAL UNLOCK</button>
-
-    <div class="grid">
-        <div class="card"><div id="hr" class="val">--</div><div>BPM</div></div>
-        <div class="card"><div id="steps" class="val">--</div><div>Steps</div></div>
-    </div>
-
-    <div id="log">Log: Ready...</div>
+    <h2>ANPR Test (Free Tier)</h2>
+    <button id="startBtn" style="padding: 15px 30px; font-size: 18px;">Start Camera</button>
+    <br><br>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <div id="status">Status: Waiting to start...</div>
+    <div id="log"><strong>Log:</strong></div>
 
     <script>
-        const logger = (m) => { 
-            const d = document.getElementById('log');
-            d.innerHTML += `<div>> ${m}</div>`; 
-            d.scrollTop = d.scrollHeight;
+        const NEW_API_KEY = "PASTE_YOUR_NEW_KEY_HERE"; // Use a fresh key!
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const status = document.getElementById('status');
+        const log = document.getElementById('log');
+
+        document.getElementById('startBtn').onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment" } 
+            });
+            video.srcObject = stream;
+            document.getElementById('startBtn').style.display = 'none';
+            runScanner();
         };
 
-        document.getElementById('go').onclick = async () => {
-            try {
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ namePrefix: 'F5' }, { namePrefix: 'Genius' }],
-                    optionalServices: ['0000fee7-0000-1000-8000-00805f9b34fb']
-                });
-
-                const server = await device.gatt.connect();
-                logger("CONNECTED");
-
-                const service = await server.getPrimaryService('0000fee7-0000-1000-8000-00805f9b34fb');
-                const writeChar = await service.getCharacteristic('0000fec7-0000-1000-8000-00805f9b34fb');
-                const notifyChar = await service.getCharacteristic('0000fec8-0000-1000-8000-00805f9b34fb');
-
-                await notifyChar.startNotifications();
+        async function runScanner() {
+            setInterval(async () => {
+                status.innerText = "Status: Capturing frame...";
+                const ctx = canvas.getContext('2d');
+                canvas.width = 400; canvas.height = 300;
+                ctx.drawImage(video, 0, 0, 400, 300);
                 
-                notifyChar.addEventListener('characteristicvaluechanged', (e) => {
-                    const data = e.target.value;
-                    let hex = "";
-                    for (let i = 0; i < data.byteLength; i++) {
-                        hex += data.getUint8(i).toString(16).padStart(2, '0').toUpperCase() + " ";
-                    }
-                    logger("INCOMING DATA: " + hex);
+                const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+                status.innerText = "Status: Calling Gemini (Free Tier)...";
+                
+                await callGemini(base64Image);
+            }, 6000); // 6 seconds interval to stay safe on Free Tier
+        }
 
-                    // If data length is 13 or 20, it's likely a health packet
-                    if (data.byteLength >= 7) {
-                        const bpm = data.getUint8(data.byteLength - 1);
-                        if (bpm > 40 && bpm < 210) document.getElementById('hr').innerText = bpm;
-                    }
-                });
+        async function callGemini(base64) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${NEW_API_KEY}`;
+            const body = {
+                contents: [{ parts: [
+                    { text: "Return JSON: {'plate': 'TEXT'}. If no plate, 'NONE'." },
+                    { inline_data: { mime_type: "image/jpeg", data: base64 } }
+                ]}]
+            };
 
-                // THE SEQUENTIAL UNLOCK
-                const codes = [
-                    [0x01],                         // Simple Sync
-                    [0xAB, 0x01],                   // Short Auth
-                    [0x02],                         // Health Toggle
-                    [0xAB, 0x00, 0x04, 0xFF, 0x31, 0x09, 0x01] // Deep Sync
-                ];
+            try {
+                const resp = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
+                const data = await resp.json();
+                const text = data.candidates[0].content.parts[0].text;
+                const result = JSON.parse(text);
 
-                for (let code of codes) {
-                    logger("Trying Code: " + code.map(x => x.toString(16)).join(' '));
-                    await writeChar.writeValue(new Uint8Array(code));
-                    await new Promise(r => setTimeout(r, 1500)); // Wait for watch response
+                if (result.plate !== "NONE") {
+                    log.innerHTML += `<div class="success">Detected: ${result.plate}</div>`;
                 }
-
-            } catch (err) {
-                logger("ERROR: " + err.message);
+            } catch (e) {
+                status.innerText = "Status: Error (Check Console)";
+                console.error(e);
             }
-        };
+        }
     </script>
 </body>
 </html>
